@@ -35,8 +35,17 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
+      # maxUnavailable must stay 0. At replicas: 1 anything higher makes the
+      # minimum available replica count replicas - maxUnavailable = 0, and the
+      # Available condition then reports True with no running pod at all, which
+      # hides a dead operator from every consumer of that status.
+      # Kubernetes rejects maxUnavailable: 0 together with maxSurge: 0, so the
+      # surge has to be 1. The surge pod shares the node network namespace
+      # (hostNetwork below), so it only fits beside the outgoing pod as long as
+      # no container here declares a port; declaring one makes upgrades
+      # unschedulable on single-node clusters.
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:

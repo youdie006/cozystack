@@ -1,0 +1,57 @@
+suite: cozystack-operator rollout strategy
+
+# At replicas: 1 the Deployment controller takes the minimum available replica
+# count as replicas - maxUnavailable, so any maxUnavailable above 0 makes that
+# minimum 0 and the Available condition reports True with no running pod. That
+# reading is what every consumer of the status sees, from the install gate to an
+# alert, so maxUnavailable is pinned at 0 here.
+#
+# Kubernetes rejects maxUnavailable: 0 together with maxSurge: 0, so the surge
+# has to be 1, and the surge pod shares the node network namespace. It fits
+# beside the outgoing pod only while no container declares a port: with a port
+# declared the scheduler has nowhere to put it on a single-node cluster and the
+# upgrade wedges. The ports assert pins that precondition rather than the
+# strategy, which is why it lives in this suite.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+tests:
+  - it: keeps a rollout strategy that lets Available go False
+    set:
+      cozystackOperator.variant: talos
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: declares no container port, so the surge pod still fits on a single node
+    set:
+      cozystackOperator.variant: talos
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].ports
+        documentSelector:
+          path: kind
+          value: Deployment
