@@ -117,7 +117,6 @@
     --namespace cozy-system \
     --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
-    --wait \
     --timeout 2m
 
   # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
@@ -127,8 +126,29 @@
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
 
-  # Verify the operator deployment is available
-  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+  # Wait for the ROLLOUT, not for condition=Available. This gate has to hold
+  # whatever rollout strategy the chart carries: once maxUnavailable reaches
+  # replicas, the controller's minimum available replica count is 0 and
+  # Available reports True with reason MinimumReplicasAvailable while no pod is
+  # running, which lets a broken operator image through in milliseconds. The
+  # install then fails a couple of minutes later on the CRD wait below, pointing
+  # the investigation at the wrong component. `rollout status` reads updated and
+  # available replicas directly and only succeeds once the updated pod is
+  # actually available.
+  # This is the only readiness gate for the operator: the helm step above does
+  # not pass --wait, so the timeout here has to cover scheduling and a cold pull
+  # of the operator image, which is not in the prepull set.
+  kubectl rollout status deployment/cozystack-operator -n cozy-system --timeout=5m || {
+    echo "=== deployment/cozystack-operator rollout did not complete ==="
+    kubectl get deployment/cozystack-operator -n cozy-system -o yaml 2>&1 || true
+    echo "=== cozy-system pods ==="
+    kubectl get pods -n cozy-system -o wide 2>&1 || true
+    echo "=== cozystack-operator logs ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --tail=50 2>&1 || true
+    echo "=== cozy-system events ==="
+    kubectl get events -n cozy-system --sort-by=.lastTimestamp 2>&1 | tail -30 || true
+    false
+  }
 
   # Wait for operator to install CRDs (happens at startup before reconcile loop).
   # kubectl wait fails immediately if the CRD does not exist yet, so poll until it appears first.
